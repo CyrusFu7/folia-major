@@ -1,4 +1,5 @@
 import handleRequest, { type QqQrRelay, type QrEvent } from '@yakult-green-tea/qq-music-api/serverless';
+import { routePhoneLogin, withPhoneLoginChannels } from '../shared/qqPhoneLogin.mjs';
 
 // worker/qq.ts
 
@@ -116,13 +117,19 @@ export async function handleQqServerlessRequest(
   const target = new URL(`${pathname.startsWith('/') ? pathname : `/${pathname}`}${search}`, origin);
   // 用原请求构造新请求，method / headers / body 全部保留：`X-QQ-Session` 就是靠这里带到后端的。
   // 第三个参数是宿主能力，不是环境变量：`env` 是每个平台都产得出的字符串表，binding 不是字符串。
-  return handleRequest(
-    new Request(target, request),
-    {
-      QQ_SESSION_SECRET: env.QQ_SESSION_SECRET,
-      QQ_SESSION_SECRET_PREVIOUS: env.QQ_SESSION_SECRET_PREVIOUS,
-    },
-    { qqRelay: relayFor(env) },
+  // 手机号验证码登录由 Folia 侧实现（上游包 3.3.6 没有这两个接口）：先看是不是 phone
+  // 路径，是就由 shared/qqPhoneLogin.mjs 处理，不进上游；其余路径原样交给上游。
+  const serverlessEnv = {
+    QQ_SESSION_SECRET: env.QQ_SESSION_SECRET,
+    QQ_SESSION_SECRET_PREVIOUS: env.QQ_SESSION_SECRET_PREVIOUS,
+  };
+  const backendRequest = new Request(target, request);
+  const phoneResponse = await routePhoneLogin(backendRequest, serverlessEnv);
+  if (phoneResponse) return phoneResponse;
+  return withPhoneLoginChannels(
+    await handleRequest(backendRequest, serverlessEnv, { qqRelay: relayFor(env) }),
+    backendRequest,
+    serverlessEnv,
   );
 }
 

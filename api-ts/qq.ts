@@ -1,4 +1,5 @@
 import handleRequest from '@yakult-green-tea/qq-music-api/serverless';
+import { routePhoneLogin, withPhoneLoginChannels } from '../shared/qqPhoneLogin.mjs';
 
 // api-ts/qq.ts
 
@@ -32,8 +33,14 @@ export default async function handler(request: Request): Promise<Response> {
   const target = new URL(`${normalized}${search ? `?${search}` : ''}`, url.origin);
 
   // 用原请求构造新请求，method / headers / body 全部保留：`X-QQ-Session` 靠这里带到后端。
-  return handleRequest(new Request(target, request), {
+  // 手机号验证码登录由 Folia 侧实现（上游包 3.3.6 没有这两个接口）：先看是不是 phone
+  // 路径，是就由 shared/qqPhoneLogin.mjs 处理，不进上游；其余路径原样交给上游。
+  const env = {
     QQ_SESSION_SECRET: process.env.QQ_SESSION_SECRET,
     QQ_SESSION_SECRET_PREVIOUS: process.env.QQ_SESSION_SECRET_PREVIOUS,
-  });
+  };
+  const backendRequest = new Request(target, request);
+  const phoneResponse = await routePhoneLogin(backendRequest, env);
+  if (phoneResponse) return phoneResponse;
+  return withPhoneLoginChannels(await handleRequest(backendRequest, env), backendRequest, env);
 }
