@@ -1,4 +1,5 @@
 import handleRequest from '@yakult-green-tea/qq-music-api/serverless';
+import { rewritePlayUrlsToProxy, routeAudioProxy } from '../shared/qqAudioProxy.mjs';
 import { routePhoneLogin, withPhoneLoginChannels } from '../shared/qqPhoneLogin.mjs';
 // api-ts/qq.ts
 /**
@@ -33,8 +34,15 @@ export default async function handler(request) {
         QQ_SESSION_SECRET_PREVIOUS: process.env.QQ_SESSION_SECRET_PREVIOUS,
     };
     const backendRequest = new Request(target, request);
+    // 音频代理先于 phone 路由：/audio 是 GET，phone 是 POST，路径本来就不重叠；
+    // 代理链接里带的是密封凭证不是会话，getMusicPlay 回包里的直链由下面改写。
+    const audioResponse = await routeAudioProxy(backendRequest, env);
+    if (audioResponse)
+        return audioResponse;
     const phoneResponse = await routePhoneLogin(backendRequest, env);
     if (phoneResponse)
         return phoneResponse;
-    return withPhoneLoginChannels(await handleRequest(backendRequest, env), backendRequest, env);
+    return withPhoneLoginChannels(await rewritePlayUrlsToProxy(await handleRequest(backendRequest, env), backendRequest, env, 
+    // 改写后的代理地址按公开路径拼：这个入口只挂在 /api/qq 下。
+    `${url.origin}/api/qq`), backendRequest, env);
 }
