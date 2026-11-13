@@ -10,7 +10,7 @@
 // 为什么代理地址里不直接带会话：播放器是普通的 <audio src>，发不出 X-QQ-Session
 // 这个自定义头；会话放进 URL（`?cookie=`）又会把一个长期有效的凭证写进访问日志，
 // 与「凭证永不进日志」冲突。所以改写时把播放链接封进一个一次性凭证里：
-// AES-256-GCM 密封的 { url, mid, quality, exp }，单首歌、10 分钟有效；
+// AES-256-GCM 密封的 { url, mid, quality, exp }，单首歌、30 分钟有效；
 // 代理端点只认这个密封凭证，不认会话，也不接受 mid/quality 现取（没有会话就取不到链接）。
 // 密封密钥由 QQ_SESSION_SECRET 派生，无 secret 时不改写（本来也拿不到链接）。
 //
@@ -22,9 +22,9 @@ import { logger } from '../node_modules/@yakult-green-tea/qq-music-api/dist-esm/
 
 export const AUDIO_PROXY_PATH = '/audio';
 
-// 密封凭证的有效期：一首歌 3–5 分钟，预取会提前几分钟拿链接，10 分钟够覆盖；
-// vkey 链接本身也有时效，凭证过期后播放器按原有重试逻辑重新要链接即可。
-export const AUDIO_PROXY_TOKEN_TTL_MS = 10 * 60_000;
+// 密封凭证的有效期：一首歌 3–5 分钟，预取会提前拿链接（预取缓存 20 分钟），
+// 30 分钟够覆盖；vkey 链接本身也有时效，凭证过期后播放器按原有重试逻辑重新要链接即可。
+export const AUDIO_PROXY_TOKEN_TTL_MS = 30 * 60_000;
 
 const jsonResponse = (body, status = 200, headers = {}) => new Response(JSON.stringify(body), {
     status,
@@ -111,6 +111,15 @@ export async function unsealAudioPlayUrl(secret, token) {
     }
     if (!payload || typeof payload !== 'object') return null;
     if (typeof payload.u !== 'string' || !payload.u || !/^https?:\/\//.test(payload.u)) return null;
+    // 只放行 QQ 的音频 CDN 主机（与库内 streamCdnSelector 用的后缀规则一致）：
+    // 凭证一旦被伪造也不至于把本端点当成任意地址的开放代理。
+    let host = '';
+    try {
+        host = new URL(payload.u).hostname.toLowerCase();
+    } catch {
+        return null;
+    }
+    if (!host.endsWith('.qqmusic.qq.com') && !host.endsWith('.tc.qq.com')) return null;
     if (typeof payload.exp !== 'number' || !Number.isFinite(payload.exp)) return null;
     return {
         url: payload.u,

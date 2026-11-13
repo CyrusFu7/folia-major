@@ -30,9 +30,9 @@ export interface PlatformNamePlace {
 
 export const PLATFORM_NAME_PLACES: Record<string, PlatformNamePlace> = {
     'api-ts/lyric-proxy.ts': { n: { qq: 2, kugou: 1 }, kind: 'main', why: 'the hosts the lyric relay may reach' },
-    'api-ts/qq.ts': { n: { qq: 10 }, kind: 'main', why: 'the serverless entry of the QQ backend; the host finds it by path' },
+    'api-ts/qq.ts': { n: { qq: 15 }, kind: 'main', why: 'the serverless entry of the QQ backend; the host finds it by path; +2 for the 1.8 phone-login wiring (list never updated), +3 for the audio proxy wiring (2026-11-12)' },
     'api/lyric-proxy.js': { n: { qq: 2, kugou: 1 }, kind: 'main', why: 'the built copy of api-ts/lyric-proxy.ts' },
-    'api/qq.js': { n: { qq: 10 }, kind: 'main', why: 'the built copy of api-ts/qq.ts' },
+    'api/qq.js': { n: { qq: 15 }, kind: 'main', why: 'the built copy of api-ts/qq.ts; +2 for the 1.8 phone-login wiring (list never updated), +3 for the audio proxy wiring (2026-11-12)' },
     'electron/aiCredentialStore.cjs': { n: { qq: 1, kugou: 1, bodian: 1 }, kind: 'doc' },
     'electron/backendLifecycle.cjs': { n: { netease: 1, qq: 1 }, kind: 'doc' },
     'electron/linuxPasswordStore.cjs': { n: { qq: 1, kugou: 1 }, kind: 'main' },
@@ -140,6 +140,6 @@ export const PLATFORM_NAME_PLACES: Record<string, PlatformNamePlace> = {
     'src/vite-env.d.ts': { n: { netease: 23, qq: 13, kugou: 5, bodian: 4, ytm: 4, spotify: 4, qishui: 4, appleMusic: 4, fnmusic: 3 }, kind: 'stored', why: 'the types of the preload bridge and of the stage API\'s lyric source; raised by the upstream merge 2026-10-17; fnmusic adds its request and status channels; appleMusic for the companion bridge type' },
     'worker/index.ts': { n: { qq: 11 }, kind: 'main', why: 'routes the QQ backend' },
     'worker/lyric-proxy.ts': { n: { qq: 1, kugou: 1 }, kind: 'main', why: 'the hosts the lyric relay may reach' },
-    'worker/qq.ts': { n: { qq: 32 }, kind: 'main', why: 'the worker entry of the QQ backend' },
+    'worker/qq.ts': { n: { qq: 36 }, kind: 'main', why: 'the worker entry of the QQ backend; +2 for the 1.8 phone-login wiring (list never updated), +2 for the audio proxy wiring (2026-11-12)' },
     'worker/qqQrChannel.ts': { n: { qq: 6 }, kind: 'main', why: 'a Durable Object the worker binds by name' },
 };

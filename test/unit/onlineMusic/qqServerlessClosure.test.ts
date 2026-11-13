@@ -17,6 +17,12 @@ const serverlessEntry = path.join(packageRoot, 'serverless/index.js');
 // Durable Object 从这条子路径获取 MQTT 监听器。根导出 import 时会启动 Koa server，Worker
 // 碰不得，所以它必须是独立入口 —— 也就必须独立受同一套闭包约束。
 const mqttEntry = path.join(packageRoot, 'serverless/mqtt.js');
+// 手机号验证码登录由 Folia 侧实现（shared/qqPhoneLogin.mjs），它直接读包内 dist-esm 的
+// 内部模块：同样走这条 gate——新拉进来的文件一个 npm 包、一个 `node:*` 都不能有。
+const phoneEntry = path.join(repoRoot, 'shared/qqPhoneLogin.mjs');
+// 音频代理由 Folia 侧实现（shared/qqAudioProxy.mjs），纯 Web API（fetch/WebCrypto），
+// 同样走这条 gate。
+const audioProxyEntry = path.join(repoRoot, 'shared/qqAudioProxy.mjs');
 
 // 静态、有 `.js` 后缀的 ESM 产物，所以直接走导入图比起过一遍 bundler 更可靠：
 // `--external` / alias 成空模块 / 改 dynamic import 都能骗过 bundler 的 metafile，骗不过这里。
@@ -57,6 +63,8 @@ describe('QQ serverless deployment gates', () => {
     it.each([
         ['serverless', serverlessEntry],
         ['mqtt', mqttEntry],
+        ['phone login', phoneEntry],
+        ['audio proxy', audioProxyEntry],
     ])('reaches no npm package and no node builtin from the %s entry', (_name, entry) => {
         expect(existsSync(entry)).toBe(true);
 
@@ -72,6 +80,8 @@ describe('QQ serverless deployment gates', () => {
     it('defines every process.env reference before Cloudflare evaluates the bundle', () => {
         const { files } = walkImportGraph(serverlessEntry);
         files.push(...walkImportGraph(mqttEntry).files);
+        files.push(...walkImportGraph(phoneEntry).files);
+        files.push(...walkImportGraph(audioProxyEntry).files);
         const references = new Set<string>();
         for (const file of files) {
             const source = readFileSync(file, 'utf8');

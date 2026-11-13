@@ -5,9 +5,27 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // 这里断言的是「还原结果」，不是后端行为 —— 后端契约由 qq-music-api 自己的测试守。
 
 const handleRequestMock = vi.hoisted(() => vi.fn());
+const routePhoneLoginMock = vi.hoisted(() => vi.fn());
+const withPhoneLoginChannelsMock = vi.hoisted(() => vi.fn());
+const routeAudioProxyMock = vi.hoisted(() => vi.fn());
+const rewritePlayUrlsToProxyMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@yakult-green-tea/qq-music-api/serverless', () => ({
     default: handleRequestMock,
+}));
+
+// 手机号登录由 Folia 侧实现（shared/qqPhoneLogin.mjs）：这里只断言两个入口在
+// phone 路径上先问它、其余路径原样交给上游；phone 模块自己的行为在 qqPhoneLogin.test.ts。
+vi.mock('../../../shared/qqPhoneLogin.mjs', () => ({
+    routePhoneLogin: routePhoneLoginMock,
+    withPhoneLoginChannels: withPhoneLoginChannelsMock,
+}));
+
+// 音频代理由 Folia 侧实现（shared/qqAudioProxy.mjs）：这里只断言两个入口在
+// /audio 路径上先问它、getMusicPlay 回包经过它改写；代理模块自己的行为在 qqAudioProxy.test.ts。
+vi.mock('../../../shared/qqAudioProxy.mjs', () => ({
+    routeAudioProxy: routeAudioProxyMock,
+    rewritePlayUrlsToProxy: rewritePlayUrlsToProxyMock,
 }));
 
 import { handleQq } from '../../../worker/qq';
@@ -45,6 +63,14 @@ describe('QQ serverless deployment adapters', () => {
     beforeEach(() => {
         handleRequestMock.mockReset();
         handleRequestMock.mockResolvedValue(new Response('{}', { status: 200 }));
+        routePhoneLoginMock.mockReset();
+        routePhoneLoginMock.mockResolvedValue(null);
+        withPhoneLoginChannelsMock.mockReset();
+        withPhoneLoginChannelsMock.mockImplementation(async (response: Response) => response);
+        routeAudioProxyMock.mockReset();
+        routeAudioProxyMock.mockResolvedValue(null);
+        rewritePlayUrlsToProxyMock.mockReset();
+        rewritePlayUrlsToProxyMock.mockImplementation(async (response: Response) => response);
     });
 
     describe('Cloudflare worker entry', () => {
@@ -138,6 +164,115 @@ describe('QQ serverless deployment adapters', () => {
             await vercelHandler(new Request('https://folia.example/api/qq?path=login/channels'));
 
             expect(forwardedRelay()).toBeUndefined();
+        });
+    });
+
+    // 手机号验证码登录不走上游 handleRequest：两个入口先问 Folia 侧的 phone 模块，
+    // 只有它说不是 phone 路径时才交给上游；channels 回包再由它补 phoneLogin 能力位。
+    describe('QQ phone login interception', () => {
+        it('handles the send path in the phone module instead of the upstream', async () => {
+            routePhoneLoginMock.mockResolvedValue(new Response('{"code":200}', { status: 200 }));
+            const response = await vercelHandler(
+                new Request('https://folia.example/api/qq?path=login/phone/send', {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({ phone: '13800000000' }),
+                }),
+            );
+
+            expect(routePhoneLoginMock).toHaveBeenCalledTimes(1);
+            expect(new URL(routePhoneLoginMock.mock.calls[0][0].url).pathname).toBe('/login/phone/send');
+            expect(handleRequestMock).not.toHaveBeenCalled();
+            expect(await response.text()).toBe('{"code":200}');
+        });
+
+        it('handles the verify path in the phone module on the worker entry too', async () => {
+            routePhoneLoginMock.mockResolvedValue(new Response('{"code":200}', { status: 200 }));
+            const response = await handleQq(
+                new Request('https://folia.example/api/qq/login/phone/verify', {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({ phone: '13800000000', code: '123456' }),
+                }),
+                { QQ_SESSION_SECRET: 'secret' },
+            );
+
+            expect(routePhoneLoginMock).toHaveBeenCalledTimes(1);
+            expect(new URL(routePhoneLoginMock.mock.calls[0][0].url).pathname).toBe('/login/phone/verify');
+            expect(routePhoneLoginMock.mock.calls[0][1]).toEqual({
+                QQ_SESSION_SECRET: 'secret',
+                QQ_SESSION_SECRET_PREVIOUS: undefined,
+            });
+            expect(handleRequestMock).not.toHaveBeenCalled();
+            expect(await response.text()).toBe('{"code":200}');
+        });
+
+        it('still delegates other paths upstream and lets the phone module augment channels', async () => {
+            const augmented = new Response('{"code":200,"data":{"features":{"auth":{"phoneLogin":true}}}}', {
+                status: 200,
+            });
+            withPhoneLoginChannelsMock.mockResolvedValue(augmented);
+
+            const response = await handleQq(new Request('https://folia.example/api/qq/login/channels'), {
+                QQ_SESSION_SECRET: 'secret',
+            });
+
+            expect(routePhoneLoginMock).toHaveBeenCalledTimes(1);
+            expect(handleRequestMock).toHaveBeenCalledTimes(1);
+            expect(withPhoneLoginChannelsMock).toHaveBeenCalledTimes(1);
+            expect(withPhoneLoginChannelsMock.mock.calls[0][1]).toBe(handleRequestMock.mock.calls[0][0]);
+            expect(await response.text()).toContain('phoneLogin');
+        });
+    });
+
+    // QQ 音频代理不走上游 handleRequest：两个入口先问 Folia 侧的 proxy 模块，
+    // 只有它说不是 /audio 路径时才继续；getMusicPlay 回包再由它改写成代理地址。
+    describe('QQ audio proxy wiring', () => {
+        const audioSecret = 'audio-proxy-test-secret';
+
+        it('handles the audio path in the proxy module instead of the upstream', async () => {
+            routeAudioProxyMock.mockResolvedValue(new Response('audio-bytes', { status: 206 }));
+            const response = await handleQq(
+                new Request('https://folia.example/api/qq/audio?t=sealed'),
+                { QQ_SESSION_SECRET: audioSecret },
+            );
+
+            expect(routeAudioProxyMock).toHaveBeenCalledTimes(1);
+            expect(new URL(routeAudioProxyMock.mock.calls[0][0].url).pathname).toBe('/audio');
+            expect(handleRequestMock).not.toHaveBeenCalled();
+            expect(await response.text()).toBe('audio-bytes');
+        });
+
+        it('handles the audio path on the Vercel entry too', async () => {
+            routeAudioProxyMock.mockResolvedValue(new Response('audio-bytes', { status: 206 }));
+            const response = await vercelHandler(
+                new Request('https://folia.example/api/qq?path=audio&t=sealed'),
+            );
+
+            expect(routeAudioProxyMock).toHaveBeenCalledTimes(1);
+            expect(new URL(routeAudioProxyMock.mock.calls[0][0].url).pathname).toBe('/audio');
+            expect(handleRequestMock).not.toHaveBeenCalled();
+            expect(await response.text()).toBe('audio-bytes');
+        });
+
+        it('rewrites a getMusicPlay response with the public base on both entries', async () => {
+            await handleQq(
+                new Request('https://folia.example/api/qq/getMusicPlay/003abc?quality=flac'),
+                { QQ_SESSION_SECRET: audioSecret },
+            );
+
+            expect(rewritePlayUrlsToProxyMock).toHaveBeenCalledTimes(1);
+            expect(rewritePlayUrlsToProxyMock.mock.calls[0][1]).toBe(handleRequestMock.mock.calls[0][0]);
+            expect(rewritePlayUrlsToProxyMock.mock.calls[0][3]).toBe('https://folia.example/api/qq');
+
+            rewritePlayUrlsToProxyMock.mockClear();
+            handleRequestMock.mockClear();
+            await vercelHandler(
+                new Request('https://folia.example/api/qq?path=getMusicPlay/003abc&quality=flac'),
+            );
+
+            expect(rewritePlayUrlsToProxyMock).toHaveBeenCalledTimes(1);
+            expect(rewritePlayUrlsToProxyMock.mock.calls[0][3]).toBe('https://folia.example/api/qq');
         });
     });
 
